@@ -516,7 +516,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
   const openBroadcastModal = (rel: ApkRelease) => {
     playSound('tap');
     setBroadcastTargetRelease(rel);
-    setEmailSubjectInput(`🕊️ [BibleNote Update] New Release ${rel.version} is now available!`);
+    setEmailSubjectInput(`🐑 [BibleNote Update] New Release ${rel.version} is now available! ✨`);
     setBroadcastStatusMessage(null);
   };
 

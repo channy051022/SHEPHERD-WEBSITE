@@ -51,7 +51,7 @@ const smtpFrom = process.env.SMTP_FROM || env.SMTP_FROM || `"BibleNote (SHEPHERD
 const websiteUrl = process.env.VITE_WEBSITE_URL || env.VITE_WEBSITE_URL || 'https://biblenote.app';
 
 console.log('====================================================');
-console.log('🕊️  BibleNote (SHEPHERD) - Release Update Email Broadcast');
+console.log('🐑  BibleNote (SHEPHERD) - Release Update Email Broadcast ✨');
 console.log('====================================================');
 
 if (!smtpUser || !smtpPass) {
@@ -101,71 +101,250 @@ async function runBroadcast() {
 
       // 3. Fetch Subscribers
       console.log('👥 Fetching registered subscribers from Supabase...');
-      const { data: subs, error: subsErr } = await supabase.from('subscribers').select('email').eq('is_active', true);
+      const { data: subs, error: subsErr } = await supabase.from('subscribers').select('*');
       
-      if (subsErr || !subs || subs.length === 0) {
-        console.log('ℹ️  No active subscribers found in database.');
+      if (subsErr) {
+        console.warn(`⚠️ Supabase subscribers query notice: ${subsErr.message}`);
+        console.log('💡 If RLS policy is blocking reads, run the schema.sql in your Supabase SQL Editor.');
+      }
+
+      // Check if a direct test email was provided via CLI (e.g. npm run broadcast v1.0.2 your@email.com)
+      const cliCustomEmail = process.argv[3];
+      let subscriberEmails = (subs || [])
+        .filter(s => s.is_active !== false && s.email)
+        .map(s => s.email.trim());
+
+      if (cliCustomEmail && cliCustomEmail.includes('@')) {
+        console.log(`🎯 Direct test recipient specified: ${cliCustomEmail}`);
+        subscriberEmails = [cliCustomEmail];
+      }
+
+      if (subscriberEmails.length === 0) {
+        console.log('ℹ️  No subscribers found in database table `subscribers`.');
+        console.log('💡 Tip: You can test sending directly to your email with:');
+        console.log(`   npm run broadcast ${targetVersion || 'v1.0.2'} your-email@gmail.com\n`);
         return;
       }
 
-      const subscriberEmails = subs.map(s => s.email).filter(Boolean);
-      console.log(`📬 Found ${subscriberEmails.length} active subscriber(s).`);
+      console.log(`📬 Found ${subscriberEmails.length} subscriber(s) to notify.`);
 
       const version = release?.version || 'v1.0.2';
-      const changelog = release?.changelog || '• General performance enhancements\n• Offline SQLite Scripture search updates';
+      const changelog = release?.changelog || '• General performance enhancements\n• Offline SQLite Scripture search updates\n• Polished UI & cute Shep interactions';
       const downloadLink = release?.download_url || `${websiteUrl}/#download`;
       const fileSize = release?.file_size_formatted || '18 MB';
 
-      const emailSubject = `🕊️ [BibleNote Update] New Release ${version} is now available!`;
+      const emailSubject = `🐑 [BibleNote Update] New Release ${version} is here! ✨`;
 
-      // HTML Template
+      // CUTE SHEEP EMAIL HTML TEMPLATE
       const htmlBody = `
       <!DOCTYPE html>
-      <html>
+      <html lang="en">
       <head>
         <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>BibleNote Update</title>
         <style>
-          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #FDFBF7; margin: 0; padding: 20px; color: #1A1817; }
-          .container { max-width: 580px; margin: 0 auto; background: #ffffff; border: 2px solid #E8D8C8; border-radius: 24px; padding: 32px; }
-          .header { text-align: center; margin-bottom: 24px; }
-          .badge { display: inline-block; padding: 4px 12px; background: #F5EBE1; color: #1E3A8A; font-weight: bold; border-radius: 12px; font-size: 12px; }
-          .title { font-size: 24px; font-weight: bold; color: #1E3A8A; margin: 12px 0 6px; }
-          .changelog-box { background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 16px; padding: 18px; margin: 20px 0; font-size: 14px; line-height: 1.6; white-space: pre-line; color: #334155; }
-          .btn-container { text-align: center; margin: 28px 0; }
-          .btn { background: #1E3A8A; color: #ffffff !important; padding: 14px 28px; font-weight: bold; text-decoration: none; border-radius: 16px; display: inline-block; font-size: 15px; box-shadow: 0 4px 12px rgba(30,58,138,0.25); }
-          .footer { font-size: 11px; text-align: center; color: #64748B; margin-top: 24px; border-top: 1px solid #E2E8F0; padding-top: 16px; }
+          body {
+            margin: 0;
+            padding: 0;
+            background-color: #F8F5EE;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            color: #2D3748;
+            -webkit-font-smoothing: antialiased;
+          }
+          table {
+            border-collapse: separate;
+          }
+          .email-wrapper {
+            width: 100%;
+            background-color: #F8F5EE;
+            padding: 32px 12px;
+          }
+          .email-container {
+            max-width: 560px;
+            margin: 0 auto;
+            background: #FFFFFF;
+            border-radius: 28px;
+            overflow: hidden;
+            border: 2px solid #E8DFD0;
+            box-shadow: 0 10px 25px rgba(229, 193, 88, 0.12), 0 2px 6px rgba(0, 0, 0, 0.04);
+          }
+          .hero-banner {
+            background: linear-gradient(145deg, #FFFDF8 0%, #FEF8E8 50%, #EFF6FF 100%);
+            padding: 36px 24px 28px;
+            text-align: center;
+            border-bottom: 2px dashed #EEDDC5;
+          }
+          .sheep-badge {
+            display: inline-block;
+            width: 72px;
+            height: 72px;
+            line-height: 72px;
+            background: #FFFFFF;
+            border-radius: 50%;
+            font-size: 38px;
+            text-align: center;
+            box-shadow: 0 6px 16px rgba(229, 193, 88, 0.28), 0 0 0 4px #FEF3C7;
+            margin-bottom: 16px;
+          }
+          .app-tag {
+            display: inline-block;
+            background: #FEF3C7;
+            color: #92400E;
+            font-size: 11px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            padding: 6px 14px;
+            border-radius: 999px;
+            margin-bottom: 10px;
+            border: 1px solid #FDE68A;
+          }
+          .email-title {
+            font-size: 24px;
+            font-weight: 800;
+            color: #1E3A8A;
+            margin: 4px 0 6px;
+            letter-spacing: -0.5px;
+          }
+          .email-subtitle {
+            font-size: 14px;
+            color: #64748B;
+            margin: 0;
+          }
+          .content-body {
+            padding: 28px 28px 24px;
+          }
+          .greeting-text {
+            font-size: 15px;
+            line-height: 1.6;
+            color: #334155;
+            margin-bottom: 20px;
+          }
+          .changelog-card {
+            background: #FAF8F5;
+            border: 1.5px solid #EFE6D8;
+            border-radius: 20px;
+            padding: 18px 20px;
+            margin: 22px 0;
+          }
+          .changelog-header {
+            font-size: 13px;
+            font-weight: 800;
+            color: #92400E;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 10px;
+            display: block;
+          }
+          .changelog-content {
+            font-size: 13.5px;
+            line-height: 1.7;
+            color: #475569;
+            white-space: pre-line;
+            font-family: inherit;
+          }
+          .feature-grid {
+            margin: 20px 0 24px;
+            background: #F0FDF4;
+            border: 1px solid #DCFCE7;
+            border-radius: 18px;
+            padding: 14px 18px;
+          }
+          .feature-row {
+            font-size: 12.5px;
+            color: #166534;
+            padding: 4px 0;
+            line-height: 1.5;
+            font-weight: 600;
+          }
+          .cta-wrap {
+            text-align: center;
+            margin: 28px 0 20px;
+          }
+          .cta-btn {
+            background: linear-gradient(135deg, #1E3A8A 0%, #2563EB 100%);
+            color: #FFFFFF !important;
+            display: inline-block;
+            padding: 15px 32px;
+            font-size: 15px;
+            font-weight: 800;
+            text-decoration: none;
+            border-radius: 999px;
+            box-shadow: 0 6px 18px rgba(30, 58, 138, 0.28);
+            letter-spacing: 0.2px;
+          }
+          .footer-section {
+            background: #FAF7F2;
+            border-top: 1px solid #E8DFD0;
+            padding: 22px 24px;
+            text-align: center;
+            border-radius: 0 0 26px 26px;
+          }
+          .footer-quote {
+            font-size: 12px;
+            color: #64748B;
+            font-style: italic;
+            margin-bottom: 8px;
+          }
+          .footer-text {
+            font-size: 11px;
+            color: #94A3B8;
+            line-height: 1.5;
+          }
         </style>
       </head>
       <body>
-        <div class="container">
-          <div class="header">
-            <span class="badge">SHEPHERD UPDATE NOTIFICATION</span>
-            <div class="title">BibleNote ${version} is Ready!</div>
-            <p style="font-size: 14px; color: #6B6560; margin: 0;">A new standalone Android release has just been published.</p>
-          </div>
+        <div class="email-wrapper">
+          <div class="email-container">
+            <!-- Hero Mascot Header -->
+            <div class="hero-banner">
+              <div class="sheep-badge">🐑</div>
+              <div>
+                <span class="app-tag">🌿 BibleNote • New Build ${version}</span>
+                <h1 class="email-title">Baa! A Fresh Update is Here! ✨</h1>
+                <p class="email-subtitle">Shep the Little Lamb has brought a brand new release to your pasture.</p>
+              </div>
+            </div>
 
-          <p style="font-size: 14px; line-height: 1.5; color: #1A1817;">
-            Greetings in Christ! A new update for <strong>BibleNote (SHEPHERD)</strong> is available for download on your device.
-          </p>
+            <!-- Main Body -->
+            <div class="content-body">
+              <p class="greeting-text">
+                Greetings friend! 🌾 A new update for <strong>BibleNote (SHEPHERD)</strong> is ready for your Android device. We've polished the experience so your Scripture study and sermon notes feel even sweeter and smoother.
+              </p>
 
-          <div class="changelog-box">
-            <strong>What's New in ${version}:</strong><br/>
-            ${changelog}
-          </div>
+              <!-- Cute Changelog Card -->
+              <div class="changelog-card">
+                <span class="changelog-header">✨ What&apos;s New & Fresh in ${version}:</span>
+                <div class="changelog-content">${changelog}</div>
+              </div>
 
-          <div class="btn-container">
-            <a href="${downloadLink}" class="btn">
-              ⬇️ Download Updated APK (~${fileSize})
-            </a>
-          </div>
+              <!-- Pastoral Highlights -->
+              <div class="feature-grid">
+                <div class="feature-row">📖 100% Offline SQLite Holy Bible (No internet needed)</div>
+                <div class="feature-row">🌾 Dual English KJV + Cebuano Bugna translations</div>
+                <div class="feature-row">✨ Automatic Scripture verse detection in your notes</div>
+                <div class="feature-row">🐑 100% Free • Zero Ads • Open Hearted</div>
+              </div>
 
-          <p style="font-size: 12px; color: #64748B; line-height: 1.5; text-align: center;">
-            ✓ 100% Offline SQLite Search • Dual English KJV + Cebuano Bugna • Home Screen Widgets
-          </p>
+              <!-- Cute Button CTA -->
+              <div class="cta-wrap">
+                <a href="${downloadLink}" class="cta-btn" target="_blank">
+                  ⬇️ Download APK Update (~${fileSize}) 🚀
+                </a>
+              </div>
+            </div>
 
-          <div class="footer">
-            You received this email because you downloaded BibleNote or signed up for updates on our portal.<br/>
-            BibleNote (SHEPHERD) • Public Domain Scripture Companion
+            <!-- Pastoral Footer -->
+            <div class="footer-section">
+              <p class="footer-quote">
+                &ldquo;The LORD is my shepherd; I shall not want.&rdquo; — Psalm 23:1
+              </p>
+              <p class="footer-text">
+                With love from the BibleNote Shepherd team 🐑🌾<br/>
+                You received this because you signed up for updates on our portal.
+              </p>
+            </div>
           </div>
         </div>
       </body>
