@@ -32,7 +32,9 @@ import {
   Star,
   Lightbulb,
   Bug,
-  CheckCheck
+  CheckCheck,
+  RefreshCw,
+  Info
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { 
@@ -43,6 +45,7 @@ import {
   type DownloadEventPayload,
   type SubscriberItem,
   isSupabaseConfigured,
+  supabase,
   fetchDownloadEvents,
   fetchSubscribers,
   fetchUserFeedback,
@@ -83,10 +86,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
   const [currentSection, setCurrentSection] = useState<NavSection>('overview');
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [releasesSearch, setReleasesSearch] = useState('');
+  const [releasesFilter, setReleasesFilter] = useState<'all' | 'active' | 'beta'>('all');
 
   // Data state (Real database rows - zero dummy data)
   const [releases, setReleases] = useState<ApkRelease[]>([]);
   const [isLoadingReleases, setIsLoadingReleases] = useState(false);
+  const [isDeletingId, setIsDeletingId] = useState<string | number | null>(null);
+  const [copiedUrlId, setCopiedUrlId] = useState<string | number | null>(null);
   const [downloadLogs, setDownloadLogs] = useState<DownloadEventPayload[]>([]);
   const [subscribersList, setSubscribersList] = useState<SubscriberItem[]>([]);
   const [feedbackList, setFeedbackList] = useState<FeedbackItem[]>([]);
@@ -94,6 +100,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
   const [feedbackStatusFilter, setFeedbackStatusFilter] = useState<string>('all');
   const [feedbackSearch, setFeedbackSearch] = useState<string>('');
   const [isUpdatingFeedback, setIsUpdatingFeedback] = useState(false);
+
+  // Diagnostics state
+  const [isCheckingHealth, setIsCheckingHealth] = useState(false);
+  const [healthStatus, setHealthStatus] = useState<'idle' | 'checking' | 'healthy' | 'warning' | 'error'>('idle');
+  const [healthReports, setHealthReports] = useState<{ label: string; status: 'ok' | 'warn' | 'error'; message: string }[]>([]);
 
   // Email Broadcast Modal state
   const [broadcastTargetRelease, setBroadcastTargetRelease] = useState<ApkRelease | null>(null);
@@ -103,6 +114,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
 
   // Upload Form state
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [customDownloadUrlInput, setCustomDownloadUrlInput] = useState('');
   const [versionInput, setVersionInput] = useState('v1.0.2');
   const [versionCodeInput, setVersionCodeInput] = useState(2);
   const [releaseTitleInput, setReleaseTitleInput] = useState('BibleNote Android Build');
@@ -285,8 +297,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
   // Handle APK upload submission
   const handleUploadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedFile) {
-      setUploadErrorMessage('Please choose or drag a .apk file to upload.');
+    if (!selectedFile && !customDownloadUrlInput.trim()) {
+      setUploadErrorMessage('Please choose a .apk file to upload or enter an external download link.');
       return;
     }
 
@@ -300,6 +312,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
       const result = await uploadNewRelease(
         {
           file: selectedFile,
+          customDownloadUrl: customDownloadUrlInput.trim() || undefined,
           version: versionInput.trim(),
           versionCode: Number(versionCodeInput) || 1,
           releaseTitle: releaseTitleInput.trim(),
@@ -321,8 +334,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
         });
         setUploadSuccessMessage(`Successfully published ${result.release.version}! Website download links are updated.`);
         setSelectedFile(null);
+        setCustomDownloadUrlInput('');
         setComputedSha256('');
-        loadReleasesList();
+        await loadReleasesList();
         
         // Suggest emailing subscribers
         if (subscribersList.length > 0) {
@@ -331,7 +345,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
           }, 1500);
         }
       } else {
-        setUploadErrorMessage(result.message || 'Upload failed. Please try again.');
+        setUploadErrorMessage(result.message || 'Upload failed. Please check storage bucket size limit or SQL schema.');
         playSound('boing');
       }
     } catch (err: unknown) {
@@ -351,13 +365,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
   };
 
   // Delete Release
-  const handleDeleteRelease = async (id: string | number) => {
-    if (!window.confirm('Are you sure you want to delete this APK release record?')) {
+  const handleDeleteRelease = async (id: string | number, version = 'this build') => {
+    if (!window.confirm(`Are you sure you want to delete release ${version}? This will remove the binary file from Supabase storage and table records.`)) {
       return;
     }
     playSound('tap');
-    await deleteRelease(id);
-    await loadReleasesList();
+    setIsDeletingId(id);
+    try {
+      await deleteRelease(id);
+      await loadReleasesList();
+      playSound('success');
+    } catch (err) {
+      console.warn('Error deleting release:', err);
+      playSound('boing');
+    } finally {
+      setIsDeletingId(null);
+    }
   };
 
   // Copy SHA-256
@@ -366,6 +389,112 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
     navigator.clipboard.writeText(hash);
     setCopiedShaId(id);
     setTimeout(() => setCopiedShaId(null), 2000);
+  };
+
+  // Copy Download Link
+  const handleCopyDownloadUrl = (id: string | number, url?: string) => {
+    playSound('tap');
+    if (!url) return;
+    navigator.clipboard.writeText(url);
+    setCopiedUrlId(id);
+    setTimeout(() => setCopiedUrlId(null), 2000);
+  };
+
+  // Run Supabase Diagnostics & Health Check
+  const runHealthCheck = async () => {
+    setIsCheckingHealth(true);
+    setHealthStatus('checking');
+    playSound('tap');
+    const reports: { label: string; status: 'ok' | 'warn' | 'error'; message: string }[] = [];
+
+    try {
+      if (!isSupabaseConfigured || !supabase) {
+        reports.push({
+          label: 'Supabase Configuration',
+          status: 'warn',
+          message: 'Running in Local Storage / Demo Auth mode. Remote Supabase URL is not configured.'
+        });
+        setHealthReports(reports);
+        setHealthStatus('warning');
+        return;
+      }
+
+      // 1. Check DB table app_releases
+      try {
+        const { error } = await supabase.from('app_releases').select('*').limit(1);
+        if (error) {
+          reports.push({
+            label: 'Database Table `app_releases`',
+            status: 'error',
+            message: `Query failed: ${error.message}. Please run schema.sql in Supabase SQL Editor.`
+          });
+        } else {
+          reports.push({
+            label: 'Database Table `app_releases`',
+            status: 'ok',
+            message: 'Connected. Table is accessible with read/write policies.'
+          });
+        }
+      } catch (e: any) {
+        reports.push({
+          label: 'Database Table `app_releases`',
+          status: 'error',
+          message: `Exception querying table: ${e.message}`
+        });
+      }
+
+      // 2. Check if is_beta column exists
+      try {
+        const { error } = await supabase.from('app_releases').select('is_beta').limit(1);
+        if (error) {
+          reports.push({
+            label: 'Column `is_beta` in `app_releases`',
+            status: 'warn',
+            message: 'Column `is_beta` is missing in database table. Run schema.sql migration to add it.'
+          });
+        } else {
+          reports.push({
+            label: 'Column `is_beta` in `app_releases`',
+            status: 'ok',
+            message: 'Column `is_beta` is present and active.'
+          });
+        }
+      } catch {
+        // ignore
+      }
+
+      // 3. Check Storage bucket app-releases
+      try {
+        const { data: bucketFiles, error: bErr } = await supabase.storage.from('app-releases').list('', { limit: 5 });
+        if (bErr) {
+          reports.push({
+            label: 'Storage Bucket `app-releases`',
+            status: 'error',
+            message: `Bucket notice: ${bErr.message}. Ensure bucket exists and public access is enabled.`
+          });
+        } else {
+          reports.push({
+            label: 'Storage Bucket `app-releases`',
+            status: 'ok',
+            message: `Bucket online. Detected ${bucketFiles?.length || 0} file(s) in root directory.`
+          });
+        }
+      } catch (e: any) {
+        reports.push({
+          label: 'Storage Bucket `app-releases`',
+          status: 'error',
+          message: `Storage exception: ${e.message}`
+        });
+      }
+
+      setHealthReports(reports);
+      const hasError = reports.some((r) => r.status === 'error');
+      const hasWarn = reports.some((r) => r.status === 'warn');
+      setHealthStatus(hasError ? 'error' : hasWarn ? 'warning' : 'healthy');
+      playSound(hasError ? 'boing' : 'success');
+    } finally {
+      setIsCheckingHealth(false);
+    }
   };
 
   // Export Subscribers to CSV
@@ -412,11 +541,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
   };
 
   const activeRelease = releases.find((r) => r.isActive) || releases[0] || null;
-  const filteredReleases = releases.filter((r) => 
-    r.version.toLowerCase().includes(releasesSearch.toLowerCase()) ||
-    r.releaseTitle.toLowerCase().includes(releasesSearch.toLowerCase()) ||
-    r.filename.toLowerCase().includes(releasesSearch.toLowerCase())
-  );
+  const activeReleasesCount = releases.filter((r) => r.isActive).length;
+  const betaReleasesCount = releases.filter((r) => r.isBeta).length;
+
+  const filteredReleases = releases.filter((rel) => {
+    const matchesSearch = 
+      rel.version.toLowerCase().includes(releasesSearch.toLowerCase()) ||
+      rel.releaseTitle.toLowerCase().includes(releasesSearch.toLowerCase()) ||
+      rel.filename.toLowerCase().includes(releasesSearch.toLowerCase());
+
+    if (!matchesSearch) return false;
+    if (releasesFilter === 'active') return rel.isActive;
+    if (releasesFilter === 'beta') return rel.isBeta;
+    return true;
+  });
 
   // Real Database Metrics (Strictly actual event logs and row counts)
   const totalActualDownloads = downloadLogs.length;
@@ -1177,7 +1315,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
                           Drag & drop your updated <code className="text-[#1E3A8A]">.apk</code> binary here
                         </h5>
                         <p className="text-xs text-[#64748B]">
-                          or browse from your local computer (Supports binaries up to 100MB)
+                          or browse from your local computer (Direct Supabase bucket upload or External URL)
                         </p>
                       </div>
                     )}
@@ -1185,6 +1323,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
 
                   {/* Form Grid */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {/* Custom / External Download Link */}
+                    <div className="sm:col-span-2 p-4 rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0] space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-bold text-[#0F172A] uppercase tracking-wider flex items-center gap-1.5">
+                          <ExternalLink className="w-3.5 h-3.5 text-[#1E3A8A]" />
+                          <span>Custom / External Download URL (Optional)</span>
+                        </label>
+                        <span className="text-[10px] font-bold text-[#64748B] bg-white border border-[#E2E8F0] px-2 py-0.5 rounded-md">
+                          Direct CDN / GitHub Release Link
+                        </span>
+                      </div>
+                      <input
+                        type="url"
+                        value={customDownloadUrlInput}
+                        onChange={(e) => setCustomDownloadUrlInput(e.target.value)}
+                        placeholder="https://github.com/your-org/repo/releases/download/v1.0.2/Shepherd.apk or Google Drive link"
+                        className="w-full px-4 py-2.5 rounded-xl bg-white border border-[#CBD5E1] focus:border-[#1E3A8A] text-xs font-mono text-[#0F172A] outline-none"
+                      />
+                      <p className="text-[11px] text-[#64748B] leading-relaxed">
+                        If your APK exceeds Supabase Storage limits or is hosted on GitHub Releases/CDN, paste the direct URL here. Website download buttons will point straight to it!
+                      </p>
+                    </div>
+
                     <div>
                       <label className="block text-xs font-bold text-[#0F172A] uppercase tracking-wider mb-1.5">
                         Version Tag (e.g. v1.0.2)
@@ -1331,7 +1492,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
                   {/* Submit Button */}
                   <button
                     type="submit"
-                    disabled={isUploading || !selectedFile}
+                    disabled={isUploading || (!selectedFile && !customDownloadUrlInput.trim())}
                     className="w-full py-4 rounded-2xl bg-[#1E3A8A] hover:bg-[#152a65] text-white font-bold text-sm shadow-xl shadow-[#1E3A8A]/20 transition-all flex items-center justify-center gap-2 active:scale-98 disabled:opacity-50 cursor-pointer"
                   >
                     {isUploading ? (
@@ -1348,32 +1509,86 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
             </div>
           )}
 
-          {/* SECTION: RELEASES & BUILDS */}
+          {/* SECTION: RELEASES & BUILDS HISTORY */}
           {currentSection === 'releases' && (
             <div className="space-y-6">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="relative max-w-xs w-full">
-                  <Search className="w-4 h-4 text-[#64748B] absolute left-3.5 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    value={releasesSearch}
-                    onChange={(e) => setReleasesSearch(e.target.value)}
-                    placeholder="Search versions or titles..."
-                    className="w-full pl-10 pr-4 py-2 rounded-xl bg-white border border-[#E2E8F0] text-xs text-[#0F172A] outline-none"
-                  />
-                </div>
-
-                <div className="flex items-center gap-2">
+              {/* Header Controls & Filter Tabs */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex items-center gap-2 flex-wrap">
                   <button
-                    onClick={loadReleasesList}
-                    className="px-3 py-2 rounded-xl bg-white border border-[#E2E8F0] text-xs font-bold text-[#1E3A8A] hover:bg-[#F1F5F9] transition-colors cursor-pointer"
+                    onClick={() => {
+                      playSound('tap');
+                      setReleasesFilter('all');
+                    }}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      releasesFilter === 'all'
+                        ? 'bg-[#1E3A8A] text-white shadow-sm'
+                        : 'bg-white text-[#64748B] hover:bg-[#F1F5F9] border border-[#E2E8F0]'
+                    }`}
                   >
-                    Refresh Registry
+                    All Builds ({releases.length})
                   </button>
 
                   <button
-                    onClick={() => setCurrentSection('upload')}
-                    className="px-3.5 py-2 rounded-xl bg-[#1E3A8A] text-white text-xs font-bold flex items-center gap-1.5 shadow-sm cursor-pointer"
+                    onClick={() => {
+                      playSound('tap');
+                      setReleasesFilter('active');
+                    }}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      releasesFilter === 'active'
+                        ? 'bg-emerald-600 text-white shadow-sm'
+                        : 'bg-white text-[#64748B] hover:bg-[#F1F5F9] border border-[#E2E8F0]'
+                    }`}
+                  >
+                    <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                    <span>Live Production ({activeReleasesCount})</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      playSound('tap');
+                      setReleasesFilter('beta');
+                    }}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      releasesFilter === 'beta'
+                        ? 'bg-amber-600 text-white shadow-sm'
+                        : 'bg-white text-[#64748B] hover:bg-[#F1F5F9] border border-[#E2E8F0]'
+                    }`}
+                  >
+                    <Flame className="w-3.5 h-3.5" />
+                    <span>Beta Testing ({betaReleasesCount})</span>
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <div className="relative max-w-xs w-full">
+                    <Search className="w-4 h-4 text-[#64748B] absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={releasesSearch}
+                      onChange={(e) => setReleasesSearch(e.target.value)}
+                      placeholder="Search version or title..."
+                      className="w-full pl-10 pr-4 py-2 rounded-xl bg-white border border-[#E2E8F0] text-xs text-[#0F172A] outline-none focus:border-[#1E3A8A]"
+                    />
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      playSound('tap');
+                      loadReleasesList();
+                    }}
+                    className="p-2 rounded-xl bg-white border border-[#E2E8F0] text-[#1E3A8A] hover:bg-[#F1F5F9] transition-colors cursor-pointer"
+                    title="Refresh Registry"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isLoadingReleases ? 'animate-spin' : ''}`} />
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      playSound('tap');
+                      setCurrentSection('upload');
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-[#1E3A8A] text-white text-xs font-bold flex items-center gap-1.5 shadow-sm cursor-pointer hover:bg-[#152a65] transition-colors"
                   >
                     <UploadCloud className="w-3.5 h-3.5 text-[#E5C158]" />
                     <span>Upload New</span>
@@ -1382,18 +1597,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
               </div>
 
               {isLoadingReleases ? (
-                <div className="py-16 text-center text-xs text-[#64748B]">Loading release registry...</div>
+                <div className="py-16 text-center text-xs text-[#64748B] space-y-2 bg-white rounded-3xl border border-[#E2E8F0]">
+                  <div className="w-7 h-7 border-2 border-[#1E3A8A] border-t-transparent rounded-full animate-spin mx-auto" />
+                  <p>Syncing release registry with database...</p>
+                </div>
               ) : filteredReleases.length === 0 ? (
-                <div className="py-16 text-center text-xs text-[#64748B]">No releases match your search.</div>
+                <div className="py-16 text-center text-xs text-[#64748B] space-y-3 bg-white rounded-3xl border border-[#E2E8F0] p-8">
+                  <div className="w-12 h-12 rounded-2xl bg-[#1E3A8A]/10 text-[#1E3A8A] flex items-center justify-center mx-auto">
+                    <Layers className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h5 className="font-bold text-sm text-[#0F172A]">No releases found</h5>
+                    <p className="text-xs text-[#64748B] mt-1">
+                      {releasesSearch ? 'No releases match your current search criteria.' : 'No APK packages uploaded yet.'}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setCurrentSection('upload')}
+                    className="px-4 py-2 rounded-xl bg-[#1E3A8A] text-white text-xs font-bold cursor-pointer inline-flex items-center gap-2"
+                  >
+                    <UploadCloud className="w-3.5 h-3.5 text-[#E5C158]" />
+                    <span>Upload Your First Build</span>
+                  </button>
+                </div>
               ) : (
                 <div className="space-y-4">
                   {filteredReleases.map((rel) => (
                     <div
-                      key={rel.id}
+                      key={rel.id || rel.version}
                       className={`p-6 rounded-3xl border transition-all ${
                         rel.isActive
-                          ? 'bg-white border-[#1E3A8A] shadow-md ring-2 ring-[#1E3A8A]/10'
-                          : 'bg-white border-[#E2E8F0]'
+                          ? 'bg-white border-[#1E3A8A] shadow-md ring-2 ring-[#1E3A8A]/15'
+                          : 'bg-white border-[#E2E8F0] hover:border-[#CBD5E1]'
                       }`}
                     >
                       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-[#E2E8F0]">
@@ -1404,28 +1639,41 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
                             {rel.version}
                           </div>
                           <div>
-                            <div className="flex items-center gap-2.5">
+                            <div className="flex items-center gap-2.5 flex-wrap">
                               <h4 className="font-bold text-base text-[#0F172A]">
                                 {rel.releaseTitle}
                               </h4>
                               {rel.isActive && (
-                                <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-extrabold tracking-wide">
-                                  LIVE PRODUCTION
+                                <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-extrabold tracking-wide flex items-center gap-1">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse" />
+                                  <span>LIVE PRODUCTION</span>
                                 </span>
                               )}
                               {rel.isBeta && (
                                 <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-extrabold tracking-wide flex items-center gap-1">
                                   <Flame className="w-3 h-3 text-amber-600" />
-                                  <span>BETA TEST</span>
+                                  <span>BETA BUILD</span>
                                 </span>
                               )}
+                              <span className="text-[10px] font-mono font-bold text-[#64748B] bg-[#F1F5F9] px-2 py-0.5 rounded-md">
+                                Code: #{rel.versionCode}
+                              </span>
                             </div>
-                            <p className="text-xs text-[#64748B] mt-0.5">
-                              {rel.filename} • {rel.fileSizeFormatted} • {rel.minAndroidVersion}
-                            </p>
+                            <div className="flex items-center gap-2 text-xs text-[#64748B] mt-1 flex-wrap">
+                              <span>{rel.filename}</span>
+                              <span>•</span>
+                              <span>{rel.fileSizeFormatted}</span>
+                              <span>•</span>
+                              <span>{rel.minAndroidVersion}</span>
+                              <span>•</span>
+                              <span>Uploaded: {rel.createdAt ? new Date(rel.createdAt).toLocaleDateString() : 'Recent'}</span>
+                              <span>•</span>
+                              <span className="font-semibold text-emerald-700">{rel.downloadsCount || 0} downloads</span>
+                            </div>
                           </div>
                         </div>
 
+                        {/* Action Buttons Toolbar */}
                         <div className="flex items-center gap-2 self-end lg:self-auto flex-wrap">
                           <button
                             onClick={() => openBroadcastModal(rel)}
@@ -1433,7 +1681,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
                             title="Broadcast Release Email to Subscribers"
                           >
                             <Mail className="w-3.5 h-3.5 text-emerald-600" />
-                            <span>Broadcast Email</span>
+                            <span>Broadcast</span>
                           </button>
 
                           {!rel.isActive && (
@@ -1457,6 +1705,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
                             <span>Download</span>
                           </button>
 
+                          {rel.downloadUrl && (
+                            <button
+                              onClick={() => handleCopyDownloadUrl(rel.id, rel.downloadUrl)}
+                              className="p-2 rounded-xl bg-white border border-[#E2E8F0] text-xs text-[#0F172A] hover:bg-[#F1F5F9] transition-colors cursor-pointer"
+                              title="Copy Download URL"
+                            >
+                              {copiedUrlId === rel.id ? (
+                                <Check className="w-4 h-4 text-emerald-600" />
+                              ) : (
+                                <ExternalLink className="w-4 h-4 text-[#64748B]" />
+                              )}
+                            </button>
+                          )}
+
                           <button
                             onClick={() => handleCopySha(rel.id, rel.sha256Checksum)}
                             className="p-2 rounded-xl bg-white border border-[#E2E8F0] text-xs text-[#0F172A] hover:bg-[#F1F5F9] transition-colors cursor-pointer"
@@ -1470,25 +1732,53 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
                           </button>
 
                           <button
-                            onClick={() => handleDeleteRelease(rel.id)}
-                            className="p-2 rounded-xl bg-white border border-rose-200 text-xs text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                            onClick={() => handleDeleteRelease(rel.id, rel.version)}
+                            disabled={isDeletingId === rel.id}
+                            className="p-2 rounded-xl bg-white border border-rose-200 text-xs text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer disabled:opacity-50"
                             title="Delete Release Record"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            {isDeletingId === rel.id ? (
+                              <div className="w-4 h-4 border-2 border-rose-600 border-t-transparent rounded-full animate-spin" />
+                            ) : (
+                              <Trash2 className="w-4 h-4" />
+                            )}
                           </button>
                         </div>
                       </div>
 
-                      {/* Changelog & SHA */}
+                      {/* Changelog, Download URL & SHA */}
                       <div className="pt-4 space-y-3">
                         <div className="text-xs text-[#475569] whitespace-pre-line leading-relaxed">
                           {rel.changelog}
                         </div>
 
+                        {rel.downloadUrl && (
+                          <div className="p-2.5 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] flex items-center justify-between gap-2 text-[11px] text-[#64748B]">
+                            <div className="flex items-center gap-2 truncate font-mono">
+                              <ExternalLink className="w-3.5 h-3.5 text-[#1E3A8A] shrink-0" />
+                              <span className="truncate">Download URL: {rel.downloadUrl}</span>
+                            </div>
+                            <button
+                              onClick={() => handleCopyDownloadUrl(rel.id, rel.downloadUrl)}
+                              className="text-xs text-[#1E3A8A] font-bold hover:underline shrink-0 cursor-pointer"
+                            >
+                              {copiedUrlId === rel.id ? 'Copied' : 'Copy'}
+                            </button>
+                          </div>
+                        )}
+
                         {rel.sha256Checksum && (
-                          <div className="p-2.5 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] flex items-center gap-2 text-[11px] font-mono text-[#64748B]">
-                            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                            <span className="truncate">SHA-256: {rel.sha256Checksum}</span>
+                          <div className="p-2.5 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] flex items-center justify-between gap-2 text-[11px] font-mono text-[#64748B]">
+                            <div className="flex items-center gap-2 truncate">
+                              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                              <span className="truncate">SHA-256: {rel.sha256Checksum}</span>
+                            </div>
+                            <button
+                              onClick={() => handleCopySha(rel.id, rel.sha256Checksum)}
+                              className="text-xs text-[#1E3A8A] font-bold hover:underline shrink-0 cursor-pointer"
+                            >
+                              {copiedShaId === rel.id ? 'Copied' : 'Copy'}
+                            </button>
                           </div>
                         )}
                       </div>
@@ -1917,25 +2207,88 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
           {/* SECTION: DATABASE & CLOUD */}
           {currentSection === 'database' && (
             <div className="space-y-6">
-              <div className="p-6 rounded-3xl bg-white border border-[#E2E8F0] shadow-xs space-y-4">
-                <div className="flex items-center justify-between">
-                  <h4 className="font-bold text-base text-[#0F172A] flex items-center gap-2">
-                    <Database className="w-4 h-4 text-[#1E3A8A]" />
-                    <span>Supabase Backend & Storage Status</span>
-                  </h4>
+              {/* Supabase Diagnostic Tool */}
+              <div className="p-6 rounded-3xl bg-white border border-[#E2E8F0] shadow-xs space-y-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h4 className="font-bold text-base text-[#0F172A] flex items-center gap-2">
+                      <Activity className="w-4 h-4 text-[#1E3A8A]" />
+                      <span>Supabase Health Diagnostics & Schema Verification</span>
+                    </h4>
+                    <p className="text-xs text-[#64748B] mt-0.5">
+                      Verify table schema columns, RLS permissions, and Storage Bucket accessibility in real time.
+                    </p>
+                  </div>
+
                   <button
-                    onClick={() => {
-                      playSound('tap');
-                      navigator.clipboard.writeText(`npm run broadcast`);
-                      setCopiedSql(true);
-                      setTimeout(() => setCopiedSql(false), 2000);
-                    }}
-                    className="px-3 py-1.5 rounded-xl bg-[#F1F5F9] text-[#1E3A8A] font-bold text-xs flex items-center gap-1.5 cursor-pointer"
+                    onClick={runHealthCheck}
+                    disabled={isCheckingHealth}
+                    className="px-4 py-2.5 rounded-xl bg-[#1E3A8A] hover:bg-[#152a65] text-white text-xs font-bold flex items-center gap-2 shadow-xs transition-all cursor-pointer disabled:opacity-50 self-start sm:self-auto"
                   >
-                    {copiedSql ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span>{copiedSql ? 'Copied command' : 'Copy Broadcast Command'}</span>
+                    {isCheckingHealth ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#E5C158]" />
+                    ) : (
+                      <CheckCircle2 className="w-3.5 h-3.5 text-[#E5C158]" />
+                    )}
+                    <span>{isCheckingHealth ? 'Testing Connection...' : 'Run Diagnostics Test'}</span>
                   </button>
                 </div>
+
+                {/* Diagnostics Status Report */}
+                {healthStatus !== 'idle' && (
+                  <div className="space-y-3 pt-2">
+                    <div className={`p-4 rounded-2xl border text-xs flex items-center justify-between ${
+                      healthStatus === 'healthy'
+                        ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                        : healthStatus === 'warning'
+                        ? 'bg-amber-50 border-amber-200 text-amber-900'
+                        : 'bg-rose-50 border-rose-200 text-rose-900'
+                    }`}>
+                      <div className="flex items-center gap-2.5 font-bold">
+                        {healthStatus === 'healthy' ? (
+                          <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                        ) : (
+                          <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+                        )}
+                        <span>
+                          {healthStatus === 'healthy'
+                            ? 'All Supabase Services & Schema Health Checks Passed!'
+                            : healthStatus === 'warning'
+                            ? 'Schema Warning Detected: Missing column or settings. Run the SQL script below.'
+                            : 'Connection or Permissions Issue Detected'}
+                        </span>
+                      </div>
+                      <span className="text-[10px] uppercase font-extrabold px-2 py-0.5 rounded-full bg-white/70">
+                        {healthStatus.toUpperCase()}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                      {healthReports.map((report, idx) => (
+                        <div
+                          key={idx}
+                          className={`p-3.5 rounded-xl border space-y-1 ${
+                            report.status === 'ok'
+                              ? 'bg-[#F8FAFC] border-emerald-200/80 text-[#0F172A]'
+                              : 'bg-amber-50/70 border-amber-200 text-amber-900'
+                          }`}
+                        >
+                          <div className="flex items-center gap-1.5 font-bold text-[11px]">
+                            {report.status === 'ok' ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-600" />
+                            ) : (
+                              <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                            )}
+                            <span>{report.label}</span>
+                          </div>
+                          <p className="text-[11px] text-[#64748B] leading-relaxed">
+                            {report.message}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
                   <div className="p-4 rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0] space-y-2">
@@ -1944,7 +2297,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
                       <span>Storage Bucket: `app-releases`</span>
                     </span>
                     <p className="text-[#64748B] text-[11px] leading-relaxed">
-                      Public bucket used for distributing official binary files worldwide via Supabase CDN.
+                      Public bucket for direct worldwide APK distribution. Free tier max single file upload is 50MB. For larger builds, use the Custom / External URL field.
                     </p>
                   </div>
 
@@ -1954,9 +2307,112 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
                       <span>Registry Table: `app_releases`</span>
                     </span>
                     <p className="text-[#64748B] text-[11px] leading-relaxed">
-                      Protected by Row-Level Security (RLS) allowing public download querying and admin-only modifications.
+                      Maintains release metadata, version tags, checksums, and download counters with Row-Level Security.
                     </p>
                   </div>
+                </div>
+              </div>
+
+              {/* Copyable SQL Setup & Storage Fix */}
+              <div className="p-6 rounded-3xl bg-white border border-[#E2E8F0] shadow-xs space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <h4 className="font-bold text-base text-[#0F172A] flex items-center gap-2">
+                      <FileCode2 className="w-4 h-4 text-[#1E3A8A]" />
+                      <span>One-Click SQL Schema & Storage Fix Migration</span>
+                    </h4>
+                    <p className="text-xs text-[#64748B] mt-0.5">
+                      Adds missing `is_beta` column, ensures `version` UNIQUE constraint, and configures storage bucket policies.
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      playSound('tap');
+                      const sqlContent = `-- BibleNote (SHEPHERD) Supabase Schema & Storage Fix Migration
+-- Run in Supabase Dashboard -> SQL Editor
+
+-- 1. Add is_beta column if missing & ensure UNIQUE on version
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_name = 'app_releases' AND column_name = 'is_beta'
+  ) THEN
+    ALTER TABLE app_releases ADD COLUMN is_beta BOOLEAN DEFAULT false;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'app_releases_version_key'
+  ) THEN
+    ALTER TABLE app_releases ADD CONSTRAINT app_releases_version_key UNIQUE (version);
+  END IF;
+EXCEPTION
+  WHEN duplicate_table OR duplicate_object THEN
+    NULL;
+END $$;
+
+-- 2. Configure RLS Policies for app_releases
+ALTER TABLE app_releases ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow public select for app_releases" ON app_releases;
+CREATE POLICY "Allow public select for app_releases" ON app_releases FOR SELECT TO anon, authenticated, public USING (true);
+
+DROP POLICY IF EXISTS "Allow admin insert for app_releases" ON app_releases;
+CREATE POLICY "Allow admin insert for app_releases" ON app_releases FOR INSERT TO anon, authenticated WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow admin update for app_releases" ON app_releases;
+CREATE POLICY "Allow admin update for app_releases" ON app_releases FOR UPDATE TO anon, authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow admin delete for app_releases" ON app_releases;
+CREATE POLICY "Allow admin delete for app_releases" ON app_releases FOR DELETE TO anon, authenticated USING (true);
+
+-- 3. Configure Storage Bucket with 500MB max file size & RLS
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES ('app-releases', 'app-releases', true, 524288000, ARRAY['application/vnd.android.package-archive', 'application/octet-stream', 'application/x-zip-compressed', 'application/zip'])
+ON CONFLICT (id) DO UPDATE SET public = true, file_size_limit = 524288000;
+
+DROP POLICY IF EXISTS "Public Access to App Releases" ON storage.objects;
+CREATE POLICY "Public Access to App Releases" ON storage.objects FOR SELECT TO anon, authenticated, public USING (bucket_id = 'app-releases');
+
+DROP POLICY IF EXISTS "Admin Upload App Releases" ON storage.objects;
+CREATE POLICY "Admin Upload App Releases" ON storage.objects FOR INSERT TO anon, authenticated, public WITH CHECK (bucket_id = 'app-releases');
+
+DROP POLICY IF EXISTS "Admin Update App Releases" ON storage.objects;
+CREATE POLICY "Admin Update App Releases" ON storage.objects FOR UPDATE TO anon, authenticated, public USING (bucket_id = 'app-releases');
+
+DROP POLICY IF EXISTS "Admin Delete App Releases" ON storage.objects;
+CREATE POLICY "Admin Delete App Releases" ON storage.objects FOR DELETE TO anon, authenticated, public USING (bucket_id = 'app-releases');`;
+
+                      navigator.clipboard.writeText(sqlContent);
+                      setCopiedSql(true);
+                      setTimeout(() => setCopiedSql(false), 2500);
+                    }}
+                    className="px-4 py-2 rounded-xl bg-[#1E3A8A] hover:bg-[#152a65] text-white font-bold text-xs flex items-center gap-2 shadow-xs transition-colors cursor-pointer"
+                  >
+                    {copiedSql ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-[#E5C158]" />}
+                    <span>{copiedSql ? 'SQL Script Copied!' : 'Copy SQL Fix to Clipboard'}</span>
+                  </button>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-[#0F172A] text-white/90 font-mono text-[11px] overflow-x-auto leading-relaxed border border-white/10 max-h-64 space-y-1">
+                  <div className="text-emerald-400 font-bold">-- 1. Open Supabase Dashboard -&gt; SQL Editor -&gt; New Query</div>
+                  <div className="text-white/70">-- 2. Paste the snippet and click &quot;Run&quot;</div>
+                  <div className="text-[#E5C158]">ALTER TABLE app_releases ADD COLUMN IF NOT EXISTS is_beta BOOLEAN DEFAULT false;</div>
+                  <div className="text-[#E5C158]">ALTER TABLE app_releases ADD CONSTRAINT app_releases_version_key UNIQUE (version);</div>
+                  <div className="text-white/50">... (Click &quot;Copy SQL Fix to Clipboard&quot; to copy the complete 40-line script)</div>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs space-y-1">
+                  <div className="font-bold flex items-center gap-1.5">
+                    <Info className="w-4 h-4 text-amber-700" />
+                    <span>How to apply this SQL migration in 30 seconds:</span>
+                  </div>
+                  <ol className="list-decimal list-inside space-y-1 text-[11px] text-amber-800/90 pt-1">
+                    <li>Click the <strong>&quot;Copy SQL Fix to Clipboard&quot;</strong> button above.</li>
+                    <li>Open your <a href="https://supabase.com/dashboard" target="_blank" rel="noreferrer" className="underline font-bold text-amber-900">Supabase Project Dashboard</a> and navigate to <strong>SQL Editor</strong>.</li>
+                    <li>Click <strong>&quot;New Query&quot;</strong>, paste the script, and press <strong>&quot;Run&quot;</strong> (Ctrl+Enter).</li>
+                  </ol>
                 </div>
               </div>
             </div>

@@ -13,16 +13,22 @@ export interface DownloadOptions {
 /**
  * Resolves the APK download URL or Blob for the active release
  */
-export async function getDirectDownloadUrl(customRelease?: ApkRelease | null): Promise<{ url: string; filename: string; isBlobUrl?: boolean }> {
+export async function getDirectDownloadUrl(customRelease?: ApkRelease | null): Promise<{ url: string; filename: string; isBlobUrl?: boolean; isExternal?: boolean }> {
   const envUrl = import.meta.env.VITE_APP_DOWNLOAD_URL;
   if (envUrl) {
-    return { url: envUrl, filename: 'biblenote-release.apk' };
+    return { url: envUrl, filename: 'biblenote-release.apk', isExternal: true };
   }
 
   const activeRelease = customRelease || (await getActiveRelease());
   const filename = activeRelease?.filename || (activeRelease?.version ? `biblenote-${activeRelease.version}-release.apk` : 'biblenote-release.apk');
 
-  // Check if we have an uploaded binary in IndexedDB
+  // 1. Check if release has a specific downloadUrl (external link or uploaded public URL)
+  if (activeRelease?.downloadUrl && activeRelease.downloadUrl.trim()) {
+    const isExternal = !activeRelease.downloadUrl.includes('supabase.co/storage');
+    return { url: activeRelease.downloadUrl.trim(), filename, isExternal };
+  }
+
+  // 2. Check if we have an uploaded binary in IndexedDB (local browser cache)
   if (activeRelease?.blobKey) {
     const blob = await getApkBlob(activeRelease.blobKey);
     if (blob) {
@@ -31,18 +37,12 @@ export async function getDirectDownloadUrl(customRelease?: ApkRelease | null): P
     }
   }
 
-  // Check if Supabase Storage URL is available
-  if (isSupabaseConfigured && supabase) {
-    const targetPath = activeRelease?.storagePath || 'biblenote-release.apk';
-    const { data } = supabase.storage.from('app-releases').getPublicUrl(targetPath);
+  // 3. Check if Supabase Storage URL is available for the storage path
+  if (isSupabaseConfigured && supabase && activeRelease?.storagePath) {
+    const { data } = supabase.storage.from('app-releases').getPublicUrl(activeRelease.storagePath);
     if (data?.publicUrl) {
       return { url: data.publicUrl, filename };
     }
-  }
-
-  // Check if release has a specific downloadUrl
-  if (activeRelease?.downloadUrl) {
-    return { url: activeRelease.downloadUrl, filename };
   }
 
   return { url: `/downloads/${filename}`, filename };
@@ -64,13 +64,15 @@ export async function handleDirectDownload(options?: DownloadOptions): Promise<v
     await trackDownloadEvent(platform, version, options?.userEmail);
 
     // 2. Get download URL / blob
-    const { url, filename, isBlobUrl } = await getDirectDownloadUrl(activeRelease);
+    const { url, filename, isBlobUrl, isExternal } = await getDirectDownloadUrl(activeRelease);
 
     // 3. Trigger browser file download
     const link = document.createElement('a');
     link.href = url;
     link.download = filename;
-    link.target = '_blank';
+    if (isExternal) {
+      link.target = '_blank';
+    }
     link.rel = 'noopener noreferrer';
 
     // If downloading a fallback local static file that might not exist in dev server, check and fallback
