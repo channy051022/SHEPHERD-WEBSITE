@@ -87,8 +87,8 @@ export const Hero: React.FC<HeroProps> = ({ onOpenDownload, onOpenInstallGuide }
             {/* Sub-headline description */}
             <p className="text-base sm:text-lg text-[#6B6560] leading-relaxed max-w-xl font-normal">
               A private, lightning-fast Bible study companion designed for focused devotion. Features instant
-              <strong className="text-[#1A1817] font-semibold"> verse reference detection</strong>, parallel 
-              <strong className="text-[#1E3A8A] font-semibold"> English KJV & Cebuano Pinadayag</strong> translations, 
+              <strong className="text-[#1A1817] font-semibold"> verse reference detection</strong>,
+              <strong className="text-[#1E3A8A] font-semibold"> multi-translation Scripture support</strong> (English KJV, Cebuano Bugna, Tagalog ADB & more), 
               home screen widgets, and your faithful mascot <strong className="text-[#966E0C] font-semibold">Shep the Lamb</strong>.
             </p>
 
@@ -154,8 +154,8 @@ export const Hero: React.FC<HeroProps> = ({ onOpenDownload, onOpenInstallGuide }
               <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white/80 border border-[#E8D8C8]/80 shadow-xs">
                 <Languages className="w-4 h-4 text-[#E5C158] shrink-0" />
                 <div className="flex flex-col">
-                  <span className="text-xs font-bold text-[#1A1817]">KJV + Cebuano</span>
-                  <span className="text-[10px] text-[#6B6560]">66 Books Complete</span>
+                  <span className="text-xs font-bold text-[#1A1817]">Multi-Translations</span>
+                  <span className="text-[10px] text-[#6B6560]">KJV, Cebuano, ADB+</span>
                 </div>
               </div>
 

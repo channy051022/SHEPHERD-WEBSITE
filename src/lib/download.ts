@@ -116,7 +116,7 @@ function triggerSimulatedApkDownload(filename: string, release?: ApkRelease) {
   const sha = release?.sha256Checksum || 'a9f83e210b42c67da456e0129bc917ff8014e82ab4792c30089e18b10f3c54d2';
 
   const content = `BibleNote (SHEPHERD) Android Release ${version}
-Package: com.biblenotes.app
+Github: com.biblenotes.app
 Checksum (SHA-256): ${sha}
 Mascot: Shep the Lamb
 Translations: English KJV, Cebuano Bugna / Pinadayag

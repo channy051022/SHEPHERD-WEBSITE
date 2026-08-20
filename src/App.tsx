@@ -13,6 +13,8 @@ import { InstallGuideModal } from './components/InstallGuideModal';
 import { DownloadEmailModal } from './components/DownloadEmailModal';
 import { ShepFloatingGreeter } from './components/ShepFloatingGreeter';
 import { AdminDashboard } from './components/Admin/AdminDashboard';
+import { FeedbackSection } from './components/FeedbackSection';
+import { ScrollRevealSection } from './components/ScrollRevealSection';
 
 export function App() {
   const [isInstallGuideOpen, setIsInstallGuideOpen] = useState(false);
@@ -64,37 +66,58 @@ export function App() {
         onOpenInstallGuide={() => setIsInstallGuideOpen(true)}
       />
 
-      {/* Main Landing Page Content */}
+      {/* Main Landing Page Content with Scroll-Linked Viewport Animations */}
       <main className="flex-grow">
-        {/* 1. Hero with authentic SHEPHERD app mockup & animated mascot Shep waving */}
-        <Hero
-          onOpenDownload={handleDownloadTrigger}
-          onOpenInstallGuide={() => setIsInstallGuideOpen(true)}
-        />
+        {/* 1. Hero with animated mascot Shep waving */}
+        <ScrollRevealSection isHero>
+          <Hero
+            onOpenDownload={handleDownloadTrigger}
+            onOpenInstallGuide={() => setIsInstallGuideOpen(true)}
+          />
+        </ScrollRevealSection>
 
         {/* 2. Official High-Resolution App Screenshots Gallery & Mockups */}
-        <AppScreensGallery />
+        <ScrollRevealSection id="gallery">
+          <AppScreensGallery />
+        </ScrollRevealSection>
 
         {/* 3. Live Interactive Auto Verse Detection Note Editor */}
-        <InteractivePlayground />
+        <ScrollRevealSection id="playground">
+          <InteractivePlayground />
+        </ScrollRevealSection>
 
         {/* 4. Shep the Mascot & Playable Mini-Games */}
-        <ShepMascotShowcase />
+        <ScrollRevealSection id="shep">
+          <ShepMascotShowcase />
+        </ScrollRevealSection>
 
         {/* 5. Dual-Language Deep Dive: English KJV & Cebuano Bugna/Pinadayag */}
-        <DualLanguageSection />
+        <ScrollRevealSection id="languages">
+          <DualLanguageSection />
+        </ScrollRevealSection>
 
         {/* 6. Standalone Android APK Direct Download Section */}
-        <DownloadSection
-          onOpenInstallGuide={() => setIsInstallGuideOpen(true)}
-          onOpenDownloadModal={handleDownloadTrigger}
-        />
+        <ScrollRevealSection id="download">
+          <DownloadSection
+            onOpenInstallGuide={() => setIsInstallGuideOpen(true)}
+            onOpenDownloadModal={handleDownloadTrigger}
+          />
+        </ScrollRevealSection>
 
         {/* 7. Email Updates & Community Signup */}
-        <LeadCapture />
+        <ScrollRevealSection>
+          <LeadCapture />
+        </ScrollRevealSection>
 
-        {/* 8. Frequently Asked Questions Accordion */}
-        <FaqSection />
+        {/* 8. User Feedback & Ideas */}
+        <ScrollRevealSection id="feedback">
+          <FeedbackSection />
+        </ScrollRevealSection>
+
+        {/* 9. Frequently Asked Questions Accordion */}
+        <ScrollRevealSection id="faq">
+          <FaqSection />
+        </ScrollRevealSection>
       </main>
 
       {/* 9. Clean Footer with Credits and Support Links */}

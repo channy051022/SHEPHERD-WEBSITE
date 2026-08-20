@@ -28,7 +28,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenDownload, onOpenInstallGui
     { name: 'App Mockups', href: '#gallery' },
     { name: 'Verse Parser', href: '#playground' },
     { name: 'Shep & Games', href: '#shep' },
-    { name: 'KJV & Cebuano', href: '#languages' },
+    { name: 'Multi-Translations', href: '#languages' },
     { name: 'FAQ', href: '#faq' },
   ];
 

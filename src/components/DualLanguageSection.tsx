@@ -34,15 +34,15 @@ export const DualLanguageSection: React.FC = () => {
         <div className="text-center max-w-3xl mx-auto mb-16 sm:mb-20">
           <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#1E3A8A]/10 border border-[#1E3A8A]/20 text-[#1E3A8A] text-xs font-bold uppercase tracking-wider mb-4">
             <Languages className="w-3.5 h-3.5" />
-            <span>Dual Scripture Translations</span>
+            <span>Multi-Translation Bible Support</span>
           </div>
 
           <h2 className="font-serif-bible font-bold text-3xl sm:text-4xl lg:text-5xl text-[#1A1817] leading-tight mb-4">
-            English KJV & <span className="text-gold-gradient">Cebuano Pinadayag</span>
+            Multiple Translations <span className="text-gold-gradient">Available Offline</span>
           </h2>
 
           <p className="text-base sm:text-lg text-[#6B6560] leading-relaxed">
-            Study side-by-side with complete offline access to all 66 books in both the historic Authorized King James Version (1769) and the beloved Cebuano Bugna / Pinadayag translation.
+            Study side-by-side with complete offline access across English KJV, Cebuano Bugna/Pinadayag, Tagalog Ang Dating Biblia (ADB), and more with instant SQLite search and downloadable Scripture packs.
           </p>
 
           {/* Verse Selector Chips */}

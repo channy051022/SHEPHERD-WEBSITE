@@ -166,7 +166,7 @@ export const DownloadSection: React.FC<DownloadSectionProps> = ({ onOpenInstallG
                 </div>
                 <div className="flex justify-between py-1.5 border-b border-[#E8D8C8]/60">
                   <span className="text-[#6B6560]">Included Translations:</span>
-                  <span className="font-bold text-[#1E3A8A]">English KJV + Cebuano Bugna</span>
+                  <span className="font-bold text-[#1E3A8A]">English KJV, Cebuano, ADB+</span>
                 </div>
                 <div className="flex justify-between py-1.5 border-b border-[#E8D8C8]/60">
                   <span className="text-[#6B6560]">Minimum OS:</span>

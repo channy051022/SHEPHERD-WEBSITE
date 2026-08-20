@@ -111,6 +111,52 @@ CREATE POLICY "Allow select subscribers for authenticated"
 
 
 -- ==============================================================================
+-- 3.5 User Feedbacks & Suggestions Table
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS user_feedback (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_name TEXT,
+  user_email TEXT,
+  category TEXT NOT NULL DEFAULT 'general', -- 'bug', 'feature_request', 'translation', 'appreciation', 'general'
+  rating INTEGER DEFAULT 5, -- 1 to 5 stars
+  message TEXT NOT NULL,
+  app_version TEXT,
+  status TEXT NOT NULL DEFAULT 'new', -- 'new', 'reviewed', 'archived'
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Enable RLS
+ALTER TABLE user_feedback ENABLE ROW LEVEL SECURITY;
+
+-- Allow anyone to submit feedback
+CREATE POLICY "Allow public insert for user_feedback"
+  ON user_feedback
+  FOR INSERT
+  TO anon, authenticated
+  WITH CHECK (true);
+
+-- Allow authenticated admin users to read, update, or delete feedback
+CREATE POLICY "Allow authenticated read for user_feedback"
+  ON user_feedback
+  FOR SELECT
+  TO authenticated
+  USING (true);
+
+CREATE POLICY "Allow authenticated update for user_feedback"
+  ON user_feedback
+  FOR UPDATE
+  TO authenticated
+  USING (true)
+  WITH CHECK (true);
+
+CREATE POLICY "Allow authenticated delete for user_feedback"
+  ON user_feedback
+  FOR DELETE
+  TO authenticated
+  USING (true);
+
+
+-- ==============================================================================
 -- 4. Supabase Storage Bucket Configuration
 -- Bucket: app-releases (Public bucket for direct APK binary distribution)
 -- ==============================================================================

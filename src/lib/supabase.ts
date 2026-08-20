@@ -334,3 +334,174 @@ export async function fetchSubscribers(): Promise<SubscriberItem[]> {
 
   return [];
 }
+
+export type FeedbackCategory = 'bug' | 'feature_request' | 'translation' | 'appreciation' | 'general';
+export type FeedbackStatus = 'new' | 'reviewed' | 'archived';
+
+export interface FeedbackItem {
+  id: string | number;
+  userName?: string;
+  userEmail?: string;
+  category: FeedbackCategory;
+  rating: number; // 1-5
+  message: string;
+  appVersion?: string;
+  status: FeedbackStatus;
+  createdAt: string;
+}
+
+export interface NewFeedbackPayload {
+  userName?: string;
+  userEmail?: string;
+  category: FeedbackCategory;
+  rating: number;
+  message: string;
+  appVersion?: string;
+}
+
+/**
+ * Submit user feedback to Supabase user_feedback table or localStorage
+ */
+export async function submitUserFeedback(payload: NewFeedbackPayload): Promise<{ success: boolean; message: string }> {
+  const newFeedback: FeedbackItem = {
+    id: Date.now(),
+    userName: payload.userName?.trim() || 'Anonymous User',
+    userEmail: payload.userEmail?.trim() || undefined,
+    category: payload.category || 'general',
+    rating: payload.rating || 5,
+    message: payload.message.trim(),
+    appVersion: payload.appVersion || 'Web Portal',
+    status: 'new',
+    createdAt: new Date().toISOString()
+  };
+
+  if (isSupabaseConfigured && supabase) {
+    try {
+      const { error } = await supabase.from('user_feedback').insert([
+        {
+          user_name: newFeedback.userName,
+          user_email: newFeedback.userEmail,
+          category: newFeedback.category,
+          rating: newFeedback.rating,
+          message: newFeedback.message,
+          app_version: newFeedback.appVersion,
+          status: newFeedback.status
+        }
+      ]);
+
+      if (error) {
+        console.warn('Supabase feedback insert error:', error.message);
+        // Fallback to local storage
+        saveFeedbackLocally(newFeedback);
+      }
+    } catch (err) {
+      console.warn('Network error saving feedback to Supabase:', err);
+      saveFeedbackLocally(newFeedback);
+    }
+  } else {
+    saveFeedbackLocally(newFeedback);
+  }
+
+  return {
+    success: true,
+    message: 'Thank you for your feedback! Your review helps us make BibleNote better for everyone. 🙏'
+  };
+}
+
+function saveFeedbackLocally(item: FeedbackItem) {
+  try {
+    const list: FeedbackItem[] = JSON.parse(localStorage.getItem('biblenote_user_feedback') || '[]');
+    list.unshift(item);
+    localStorage.setItem('biblenote_user_feedback', JSON.stringify(list.slice(0, 300)));
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Fetch all user feedback items for Admin Dashboard
+ */
+export async function fetchUserFeedback(): Promise<FeedbackItem[]> {
+  if (isSupabaseConfigured && supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('user_feedback')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (!error && data) {
+        return data.map((d: any) => ({
+          id: d.id,
+          userName: d.user_name || 'Anonymous User',
+          userEmail: d.user_email || '',
+          category: d.category || 'general',
+          rating: d.rating || 5,
+          message: d.message || '',
+          appVersion: d.app_version || 'v1.0.1',
+          status: d.status || 'new',
+          createdAt: d.created_at
+        }));
+      }
+    } catch (err) {
+      console.warn('Failed to fetch user feedback from Supabase:', err);
+    }
+  }
+
+  try {
+    const local = JSON.parse(localStorage.getItem('biblenote_user_feedback') || '[]');
+    if (Array.isArray(local)) {
+      return local;
+    }
+  } catch {
+    // ignore
+  }
+
+  return [];
+}
+
+/**
+ * Update feedback status (reviewed, archived, new)
+ */
+export async function updateFeedbackStatus(id: string | number, status: FeedbackStatus): Promise<boolean> {
+  if (isSupabaseConfigured && supabase) {
+    try {
+      await supabase.from('user_feedback').update({ status }).eq('id', id);
+    } catch (e) {
+      console.warn('Error updating feedback in Supabase:', e);
+    }
+  }
+
+  try {
+    const local: FeedbackItem[] = JSON.parse(localStorage.getItem('biblenote_user_feedback') || '[]');
+    const updated = local.map((f) => (f.id === id || String(f.id) === String(id) ? { ...f, status } : f));
+    localStorage.setItem('biblenote_user_feedback', JSON.stringify(updated));
+  } catch {
+    // ignore
+  }
+
+  return true;
+}
+
+/**
+ * Delete feedback item
+ */
+export async function deleteFeedbackItem(id: string | number): Promise<boolean> {
+  if (isSupabaseConfigured && supabase) {
+    try {
+      await supabase.from('user_feedback').delete().eq('id', id);
+    } catch (e) {
+      console.warn('Error deleting feedback in Supabase:', e);
+    }
+  }
+
+  try {
+    const local: FeedbackItem[] = JSON.parse(localStorage.getItem('biblenote_user_feedback') || '[]');
+    const filtered = local.filter((f) => f.id !== id && String(f.id) !== String(id));
+    localStorage.setItem('biblenote_user_feedback', JSON.stringify(filtered));
+  } catch {
+    // ignore
+  }
+
+  return true;
+}
+

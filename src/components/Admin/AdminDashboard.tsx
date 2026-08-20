@@ -27,7 +27,12 @@ import {
   HardDrive,
   Send,
   Mail,
-  Flame
+  Flame,
+  MessageSquarePlus,
+  Star,
+  Lightbulb,
+  Bug,
+  CheckCheck
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { 
@@ -39,7 +44,12 @@ import {
   type SubscriberItem,
   isSupabaseConfigured,
   fetchDownloadEvents,
-  fetchSubscribers
+  fetchSubscribers,
+  fetchUserFeedback,
+  updateFeedbackStatus,
+  deleteFeedbackItem,
+  type FeedbackItem,
+  type FeedbackStatus
 } from '../../lib/supabase';
 import { 
   getAllReleases, 
@@ -58,7 +68,7 @@ interface AdminDashboardProps {
   onExit: () => void;
 }
 
-type NavSection = 'overview' | 'upload' | 'releases' | 'analytics' | 'subscribers' | 'database';
+type NavSection = 'overview' | 'upload' | 'releases' | 'analytics' | 'subscribers' | 'feedback' | 'database';
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
   // Auth state
@@ -79,6 +89,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
   const [isLoadingReleases, setIsLoadingReleases] = useState(false);
   const [downloadLogs, setDownloadLogs] = useState<DownloadEventPayload[]>([]);
   const [subscribersList, setSubscribersList] = useState<SubscriberItem[]>([]);
+  const [feedbackList, setFeedbackList] = useState<FeedbackItem[]>([]);
+  const [feedbackCategoryFilter, setFeedbackCategoryFilter] = useState<string>('all');
+  const [feedbackStatusFilter, setFeedbackStatusFilter] = useState<string>('all');
+  const [feedbackSearch, setFeedbackSearch] = useState<string>('');
+  const [isUpdatingFeedback, setIsUpdatingFeedback] = useState(false);
 
   // Email Broadcast Modal state
   const [broadcastTargetRelease, setBroadcastTargetRelease] = useState<ApkRelease | null>(null);
@@ -112,16 +127,58 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
 
   const loadAnalyticsAndSubscribers = useCallback(async () => {
     try {
-      const [events, subs] = await Promise.all([
+      const [events, subs, feedbacks] = await Promise.all([
         fetchDownloadEvents(),
-        fetchSubscribers()
+        fetchSubscribers(),
+        fetchUserFeedback()
       ]);
       setDownloadLogs(events);
       setSubscribersList(subs);
+      setFeedbackList(feedbacks);
     } catch (e) {
       console.warn('Error loading analytics:', e);
     }
   }, []);
+
+  const handleToggleFeedbackStatus = async (id: string | number, currentStatus: FeedbackStatus) => {
+    playSound('tap');
+    const newStatus: FeedbackStatus = currentStatus === 'reviewed' ? 'new' : 'reviewed';
+    setIsUpdatingFeedback(true);
+    await updateFeedbackStatus(id, newStatus);
+    setFeedbackList(prev => prev.map(f => (f.id === id || String(f.id) === String(id) ? { ...f, status: newStatus } : f)));
+    setIsUpdatingFeedback(false);
+  };
+
+  const handleDeleteFeedbackItem = async (id: string | number) => {
+    if (!window.confirm('Are you sure you want to delete this feedback item?')) return;
+    playSound('tap');
+    await deleteFeedbackItem(id);
+    setFeedbackList(prev => prev.filter(f => f.id !== id && String(f.id) !== String(id)));
+  };
+
+  const handleExportFeedbackCSV = () => {
+    playSound('tap');
+    const headers = ['ID', 'User Name', 'Email', 'Category', 'Rating', 'Message', 'App Version', 'Status', 'Date'];
+    const rows = feedbackList.map(f => [
+      f.id,
+      `"${(f.userName || 'Anonymous').replace(/"/g, '""')}"`,
+      `"${(f.userEmail || '').replace(/"/g, '""')}"`,
+      f.category,
+      f.rating,
+      `"${f.message.replace(/"/g, '""')}"`,
+      f.appVersion || 'v1.0.2',
+      f.status,
+      f.createdAt
+    ]);
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `biblenote_feedbacks_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   const loadReleasesList = useCallback(async () => {
     setIsLoadingReleases(true);
@@ -637,6 +694,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
           <button
             onClick={() => {
               playSound('tap');
+              setCurrentSection('feedback');
+              setIsMobileSidebarOpen(false);
+            }}
+            className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+              currentSection === 'feedback'
+                ? 'bg-[#1E3A8A] text-white shadow-md shadow-[#1E3A8A]/30 font-bold'
+                : 'text-white/70 hover:bg-white/5 hover:text-white'
+            }`}
+          >
+            <div className="flex items-center gap-3">
+              <MessageSquarePlus className={`w-4 h-4 ${currentSection === 'feedback' ? 'text-[#E5C158]' : 'text-white/60'}`} />
+              <span>User Feedbacks</span>
+            </div>
+            {feedbackList.length > 0 && (
+              <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-[#E5C158] text-[#0F172A]">
+                {feedbackList.length}
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={() => {
+              playSound('tap');
               setCurrentSection('database');
               setIsMobileSidebarOpen(false);
             }}
@@ -752,7 +832,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
           {currentSection === 'overview' && (
             <div className="space-y-6">
               {/* Stat Metric Cards (Actual Database Data) */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
                 <div className="p-5 rounded-2xl bg-white border border-[#E2E8F0] shadow-xs space-y-1">
                   <div className="flex items-center justify-between text-[#64748B]">
                     <span className="text-xs font-bold uppercase tracking-wider">Total Downloads</span>
@@ -802,6 +882,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
                   </div>
                   <span className="text-[11px] text-emerald-600 font-semibold">
                     Email updates opt-in
+                  </span>
+                </div>
+
+                <div 
+                  onClick={() => {
+                    playSound('tap');
+                    setCurrentSection('feedback');
+                  }}
+                  className="p-5 rounded-2xl bg-white border border-[#E2E8F0] shadow-xs space-y-1 cursor-pointer hover:border-[#1E3A8A] transition-colors"
+                >
+                  <div className="flex items-center justify-between text-[#64748B]">
+                    <span className="text-xs font-bold uppercase tracking-wider">User Feedbacks</span>
+                    <MessageSquarePlus className="w-4 h-4 text-amber-500" />
+                  </div>
+                  <div className="font-display font-extrabold text-2xl sm:text-3xl text-[#0F172A]">
+                    {feedbackList.length}
+                  </div>
+                  <span className="text-[11px] text-amber-600 font-semibold flex items-center gap-1">
+                    <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+                    <span>
+                      Avg {feedbackList.length > 0 ? (feedbackList.reduce((acc, curr) => acc + (curr.rating || 5), 0) / feedbackList.length).toFixed(1) : '5.0'} Rating
+                    </span>
                   </span>
                 </div>
               </div>
@@ -1531,6 +1633,281 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onExit }) => {
                         ))}
                       </tbody>
                     </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* SECTION: USER FEEDBACKS & IDEAS */}
+          {currentSection === 'feedback' && (
+            <div className="space-y-6">
+              {/* Header & Stat Summary */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="p-5 rounded-2xl bg-white border border-[#E2E8F0] shadow-xs space-y-1">
+                  <div className="flex items-center justify-between text-[#64748B]">
+                    <span className="text-xs font-bold uppercase tracking-wider">Total Responses</span>
+                    <MessageSquarePlus className="w-4 h-4 text-[#1E3A8A]" />
+                  </div>
+                  <div className="font-display font-extrabold text-2xl sm:text-3xl text-[#0F172A]">
+                    {feedbackList.length}
+                  </div>
+                  <span className="text-[11px] text-[#64748B]">
+                    From web landing page
+                  </span>
+                </div>
+
+                <div className="p-5 rounded-2xl bg-white border border-[#E2E8F0] shadow-xs space-y-1">
+                  <div className="flex items-center justify-between text-[#64748B]">
+                    <span className="text-xs font-bold uppercase tracking-wider">Average Rating</span>
+                    <Star className="w-4 h-4 text-[#E5C158]" />
+                  </div>
+                  <div className="font-display font-extrabold text-2xl sm:text-3xl text-[#E5C158] flex items-center gap-1.5">
+                    <span>
+                      {feedbackList.length > 0 
+                        ? (feedbackList.reduce((acc, curr) => acc + (curr.rating || 5), 0) / feedbackList.length).toFixed(1) 
+                        : '5.0'}
+                    </span>
+                    <span className="text-sm font-bold text-[#64748B]">/ 5.0</span>
+                  </div>
+                  <span className="text-[11px] text-amber-600 font-semibold">
+                    ⭐ User satisfaction score
+                  </span>
+                </div>
+
+                <div className="p-5 rounded-2xl bg-white border border-[#E2E8F0] shadow-xs space-y-1">
+                  <div className="flex items-center justify-between text-[#64748B]">
+                    <span className="text-xs font-bold uppercase tracking-wider">Feature Requests</span>
+                    <Lightbulb className="w-4 h-4 text-amber-500" />
+                  </div>
+                  <div className="font-display font-extrabold text-2xl sm:text-3xl text-amber-600">
+                    {feedbackList.filter(f => f.category === 'feature_request').length}
+                  </div>
+                  <span className="text-[11px] text-amber-600 font-semibold">
+                    Ideas & improvements
+                  </span>
+                </div>
+
+                <div className="p-5 rounded-2xl bg-white border border-[#E2E8F0] shadow-xs space-y-1">
+                  <div className="flex items-center justify-between text-[#64748B]">
+                    <span className="text-xs font-bold uppercase tracking-wider">Bug Reports</span>
+                    <Bug className="w-4 h-4 text-rose-500" />
+                  </div>
+                  <div className="font-display font-extrabold text-2xl sm:text-3xl text-rose-600">
+                    {feedbackList.filter(f => f.category === 'bug').length}
+                  </div>
+                  <span className="text-[11px] text-rose-600 font-semibold">
+                    Issues & crash reports
+                  </span>
+                </div>
+              </div>
+
+              {/* Feedbacks Filter & List Card */}
+              <div className="p-6 rounded-3xl bg-white border border-[#E2E8F0] shadow-xs space-y-5">
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <h4 className="font-bold text-base text-[#0F172A] flex items-center gap-2">
+                      <MessageSquarePlus className="w-4 h-4 text-[#1E3A8A]" />
+                      <span>Community Feedbacks & Suggestions ({feedbackList.length})</span>
+                    </h4>
+                    <p className="text-xs text-[#64748B]">
+                      User reviews, feature suggestions, bug reports, and translation corrections submitted by website visitors.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={loadAnalyticsAndSubscribers}
+                      className="px-3.5 py-2 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] text-xs font-bold text-[#1E3A8A] hover:bg-[#F1F5F9] transition-colors cursor-pointer"
+                    >
+                      Refresh
+                    </button>
+
+                    <button
+                      onClick={handleExportFeedbackCSV}
+                      disabled={feedbackList.length === 0}
+                      className="px-4 py-2 rounded-xl bg-[#1E3A8A] hover:bg-[#152a65] text-white text-xs font-bold flex items-center gap-1.5 shadow-sm transition-colors disabled:opacity-50 cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5 text-[#E5C158]" />
+                      <span>Export Feedbacks (CSV)</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Filter Bars */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-[#94A3B8] absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      placeholder="Search messages, name, email..."
+                      value={feedbackSearch}
+                      onChange={(e) => setFeedbackSearch(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] text-xs text-[#0F172A] outline-none focus:border-[#1E3A8A]"
+                    />
+                  </div>
+
+                  <div>
+                    <select
+                      value={feedbackCategoryFilter}
+                      onChange={(e) => setFeedbackCategoryFilter(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] text-xs text-[#0F172A] outline-none focus:border-[#1E3A8A]"
+                    >
+                      <option value="all">All Categories</option>
+                      <option value="feature_request">💡 Feature Requests</option>
+                      <option value="bug">🐛 Bug Reports</option>
+                      <option value="translation">📖 Translation / Verse</option>
+                      <option value="appreciation">❤️ Praise & Love</option>
+                      <option value="general">💬 General</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <select
+                      value={feedbackStatusFilter}
+                      onChange={(e) => setFeedbackStatusFilter(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] text-xs text-[#0F172A] outline-none focus:border-[#1E3A8A]"
+                    >
+                      <option value="all">All Statuses</option>
+                      <option value="new">🔵 New / Unreviewed</option>
+                      <option value="reviewed">✅ Reviewed</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Feedback Cards List */}
+                {feedbackList.length === 0 ? (
+                  <div className="py-14 text-center text-xs text-[#64748B] space-y-2">
+                    <MessageSquarePlus className="w-9 h-9 text-[#CBD5E1] mx-auto" />
+                    <p className="font-medium text-sm text-[#0F172A]">No feedback submitted yet.</p>
+                    <p>When visitors submit ideas or bug reports on the home page, they will appear here instantly.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3 pt-2">
+                    {feedbackList
+                      .filter(f => {
+                        const matchesCategory = feedbackCategoryFilter === 'all' || f.category === feedbackCategoryFilter;
+                        const matchesStatus = feedbackStatusFilter === 'all' || f.status === feedbackStatusFilter;
+                        const matchesSearch = feedbackSearch === '' || 
+                          f.message.toLowerCase().includes(feedbackSearch.toLowerCase()) || 
+                          (f.userName && f.userName.toLowerCase().includes(feedbackSearch.toLowerCase())) ||
+                          (f.userEmail && f.userEmail.toLowerCase().includes(feedbackSearch.toLowerCase()));
+                        return matchesCategory && matchesStatus && matchesSearch;
+                      })
+                      .map((item) => (
+                        <div
+                          key={item.id}
+                          className={`p-5 rounded-2xl border transition-all ${
+                            item.status === 'new'
+                              ? 'bg-white border-[#1E3A8A]/30 shadow-xs'
+                              : 'bg-[#F8FAFC] border-[#E2E8F0] opacity-90'
+                          }`}
+                        >
+                          <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 pb-3 border-b border-[#E2E8F0]">
+                            <div className="space-y-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                {/* Star rating */}
+                                <div className="flex items-center gap-0.5">
+                                  {[...Array(5)].map((_, i) => (
+                                    <Star
+                                      key={i}
+                                      className={`w-3.5 h-3.5 ${
+                                        i < (item.rating || 5)
+                                          ? 'text-[#E5C158] fill-[#E5C158]'
+                                          : 'text-[#E2E8F0]'
+                                      }`}
+                                    />
+                                  ))}
+                                </div>
+
+                                {/* Category Badge */}
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                                  item.category === 'bug'
+                                    ? 'bg-rose-100 text-rose-800'
+                                    : item.category === 'feature_request'
+                                    ? 'bg-amber-100 text-amber-800'
+                                    : item.category === 'translation'
+                                    ? 'bg-blue-100 text-blue-800'
+                                    : item.category === 'appreciation'
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : 'bg-slate-100 text-slate-800'
+                                }`}>
+                                  {item.category === 'bug' && '🐛 Bug'}
+                                  {item.category === 'feature_request' && '💡 Idea'}
+                                  {item.category === 'translation' && '📖 Scripture'}
+                                  {item.category === 'appreciation' && '❤️ Praise'}
+                                  {item.category === 'general' && '💬 General'}
+                                </span>
+
+                                {/* Status Badge */}
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                                  item.status === 'new'
+                                    ? 'bg-[#1E3A8A] text-white'
+                                    : 'bg-emerald-100 text-emerald-800'
+                                }`}>
+                                  {item.status === 'new' ? 'New' : 'Reviewed'}
+                                </span>
+                              </div>
+
+                              <div className="text-xs text-[#0F172A] font-bold flex items-center gap-2 pt-0.5">
+                                <span>{item.userName || 'Anonymous User'}</span>
+                                {item.userEmail && (
+                                  <span className="text-[#64748B] font-normal">
+                                    ({item.userEmail})
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Date & App Version */}
+                            <div className="text-right text-[11px] text-[#64748B]">
+                              <div>{item.createdAt ? new Date(item.createdAt).toLocaleString() : 'Recent'}</div>
+                              <div className="font-mono text-[10px] text-[#94A3B8]">Build: {item.appVersion || 'Web'}</div>
+                            </div>
+                          </div>
+
+                          {/* Message Content */}
+                          <div className="py-3 text-xs text-[#334155] whitespace-pre-line leading-relaxed font-normal">
+                            "{item.message}"
+                          </div>
+
+                          {/* Actions */}
+                          <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-[#E2E8F0]">
+                            <div className="flex items-center gap-2">
+                              {item.userEmail && (
+                                <a
+                                  href={`mailto:${item.userEmail}?subject=BibleNote (SHEPHERD) - Regarding your feedback&body=Hi ${item.userName || 'there'},\n\nThank you for reaching out with your feedback:\n"${item.message}"\n\n`}
+                                  className="px-3 py-1.5 rounded-lg bg-[#1E3A8A] hover:bg-[#152a65] text-white text-[11px] font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                                >
+                                  <Mail className="w-3 h-3 text-[#E5C158]" />
+                                  <span>Reply via Email</span>
+                                </a>
+                              )}
+
+                              <button
+                                onClick={() => handleToggleFeedbackStatus(item.id, item.status)}
+                                disabled={isUpdatingFeedback}
+                                className={`px-3 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                                  item.status === 'new'
+                                    ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200'
+                                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                                }`}
+                              >
+                                <CheckCheck className="w-3 h-3" />
+                                <span>{item.status === 'new' ? 'Mark Reviewed' : 'Mark as New'}</span>
+                              </button>
+                            </div>
+
+                            <button
+                              onClick={() => handleDeleteFeedbackItem(item.id)}
+                              className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 hover:text-rose-700 text-xs transition-colors cursor-pointer"
+                              title="Delete Feedback"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
                   </div>
                 )}
               </div>
